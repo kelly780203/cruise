@@ -105,10 +105,13 @@ const API_URL = 'https://script.google.com/macros/s/AKfycbwmS5yTJtGJjEYj7IGzroN_
 // 把原本的 google.script.run 呼叫轉成 fetch，畫面程式不用改
 (function(){
   async function call(action, params, post){
-    let r;
-    if (post) r = await fetch(API_URL, {method:'POST', body: JSON.stringify(Object.assign({api:action}, params))});
-    else { const q = new URLSearchParams(Object.assign({api:action}, params)); r = await fetch(API_URL + '?' + q.toString(), {cache:'no-store'}); }
-    const j = await r.json(); if (!j.ok) throw new Error(j.error || '系統忙碌，請稍後再試'); return j.data;
+    let r; const ac = new AbortController(); const tm = setTimeout(()=>ac.abort(), 25000);
+    try {
+      if (post) r = await fetch(API_URL, {method:'POST', body: JSON.stringify(Object.assign({api:action}, params)), signal:ac.signal});
+      else { const q = new URLSearchParams(Object.assign({api:action}, params)); r = await fetch(API_URL + '?' + q.toString(), {cache:'no-store', signal:ac.signal}); }
+    } catch(e) { throw new Error(e.name==='AbortError' ? '連線逾時' : '網路連線失敗'); } finally { clearTimeout(tm); }
+    let j; try { j = await r.json(); } catch(e) { throw new Error('後台回應格式錯誤'); }
+    if (!j.ok) throw new Error(j.error || '系統忙碌，請稍後再試'); return j.data;
   }
   const map = {
     getCatalog: ()=>call('catalog', {}),
@@ -136,8 +139,16 @@ $('#nick').addEventListener('change',saveIdent);$('#last3').addEventListener('ch
 function fmtDl(iso){const d=new Date(iso);if(isNaN(d))return iso;const p=new Intl.DateTimeFormat('zh-TW',{timeZone:'Asia/Taipei',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}).format(d);return p.replace(/\s+/,' ')}
 function closed(it){const s=DATA.settings;const dl=it.cat==='OBG'?s['OBG截止']:s['連線截止'];return dl&&new Date()>new Date(dl)}
 
+let tries=0;
 function load(){
-  google.script.run.withSuccessHandler(d=>{DATA=d;render()}).withFailureHandler(e=>toast(e.message)).getCatalog();
+  if(!DATA){$('#view').innerHTML='<div class="empty">商品載入中，第一次開啟約需 5～10 秒…</div>'}
+  google.script.run.withSuccessHandler(d=>{tries=0;DATA=d;render()}).withFailureHandler(e=>{
+    tries++;
+    if(tries<3){setTimeout(load,1500);return}
+    tries=0;
+    if(!DATA)$('#view').innerHTML='<div class="empty">連線不穩，商品沒有載入<br><small>'+(e&&e.message||'')+'</small><br><br><button class="go" onclick="load()">重新載入</button></div>';
+    else toast('連線不穩，請稍後再試');
+  }).getCatalog();
 }
 function render(){
   const s=DATA.settings;
